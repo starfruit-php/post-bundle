@@ -7,6 +7,8 @@ use Pimcore\Model\Asset\Image;
 use PhpOffice\PhpWord\Element\Cell;
 use PhpOffice\PhpWord\Element\Image as WordImage;
 use PhpOffice\PhpWord\Element\Link;
+use PhpOffice\PhpWord\Element\ListItem;
+use PhpOffice\PhpWord\Element\ListItemRun;
 use PhpOffice\PhpWord\Element\Table;
 use PhpOffice\PhpWord\Element\Text;
 use PhpOffice\PhpWord\Element\TextBreak;
@@ -37,12 +39,78 @@ class HelperService
         $html = '';
 
         foreach ($document->getSections() as $section) {
-            foreach ($section->getElements() as $element) {
-                $html .= self::renderPhpWordElement(
-                    $element,
+            $html .= self::renderPhpWordElements(
+                $section->getElements(),
+                $mainObject
+            );
+        }
+
+        return $html;
+    }
+
+    /**
+     * Render a collection of PHPWord elements.
+     *
+     * Consecutive list items are grouped into ul/ol.
+     * Image rendering is delegated to the original image handler.
+     */
+    protected static function renderPhpWordElements(
+        array $elements,
+        $mainObject
+    ): string {
+        $html = '';
+        $listItems = [];
+        $currentListTag = null;
+
+        foreach ($elements as $element) {
+            if (
+                $element instanceof ListItem ||
+                $element instanceof ListItemRun
+            ) {
+                $listTag = self::getPhpWordListTag($element);
+
+                if (
+                    $currentListTag !== null &&
+                    $currentListTag !== $listTag
+                ) {
+                    $html .= self::renderPhpWordList(
+                        $listItems,
+                        $currentListTag,
+                        $mainObject
+                    );
+
+                    $listItems = [];
+                }
+
+                $currentListTag = $listTag;
+                $listItems[] = $element;
+
+                continue;
+            }
+
+            if ($listItems !== []) {
+                $html .= self::renderPhpWordList(
+                    $listItems,
+                    $currentListTag ?: 'ul',
                     $mainObject
                 );
+
+                $listItems = [];
+                $currentListTag = null;
             }
+
+            $html .= self::renderPhpWordElement(
+                $element,
+                $mainObject
+            );
+        }
+
+        if ($listItems !== []) {
+            $html .= self::renderPhpWordList(
+                $listItems,
+                $currentListTag ?: 'ul',
+                $mainObject
+            );
         }
 
         return $html;
@@ -55,7 +123,24 @@ class HelperService
         $element,
         $mainObject
     ): string {
-        /**
+        /*
+         * ListItemRun must be checked before TextRun because it
+         * represents a list paragraph containing rich text.
+         *
+         * ListItem elements are normally grouped by
+         * renderPhpWordElements().
+         */
+        if (
+            $element instanceof ListItem ||
+            $element instanceof ListItemRun
+        ) {
+            return self::renderPhpWordListItemContent(
+                $element,
+                $mainObject
+            );
+        }
+
+        /*
          * TextRun.
          */
         if ($element instanceof TextRun) {
@@ -65,22 +150,24 @@ class HelperService
             );
         }
 
-        /**
+        /*
          * Normal Text.
          */
         if ($element instanceof Text) {
             return self::renderPhpWordText($element);
         }
 
-        /**
+        /*
          * Link.
          */
         if ($element instanceof Link) {
             return self::renderPhpWordLink($element);
         }
 
-        /**
+        /*
          * Image.
+         *
+         * Keep the original image rendering method unchanged.
          */
         if ($element instanceof WordImage) {
             return self::renderPhpWordImage(
@@ -89,7 +176,7 @@ class HelperService
             );
         }
 
-        /**
+        /*
          * Table.
          */
         if ($element instanceof Table) {
@@ -99,27 +186,21 @@ class HelperService
             );
         }
 
-        /**
+        /*
          * Line break.
          */
         if ($element instanceof TextBreak) {
             return '<br>';
         }
 
-        /**
+        /*
          * Other nested PHPWord elements.
          */
         if (method_exists($element, 'getElements')) {
-            $html = '';
-
-            foreach ($element->getElements() as $child) {
-                $html .= self::renderPhpWordElement(
-                    $child,
-                    $mainObject
-                );
-            }
-
-            return $html;
+            return self::renderPhpWordElements(
+                $element->getElements(),
+                $mainObject
+            );
         }
 
         return '';
@@ -147,9 +228,6 @@ class HelperService
             return '';
         }
 
-        /**
-         * Get paragraph style.
-         */
         $paragraphStyle = null;
 
         if (method_exists($textRun, 'getParagraphStyle')) {
@@ -160,14 +238,12 @@ class HelperService
             }
         }
 
-        /**
-         * Detect heading.
+        /*
+         * Detect Heading 1–6.
          */
-        $tag = self::getPhpWordHeadingTag(
-            $paragraphStyle
-        );
+        $tag = self::getPhpWordHeadingTag($paragraphStyle);
 
-        /**
+        /*
          * Paragraph CSS.
          */
         $style = self::getPhpWordParagraphStyle(
@@ -177,23 +253,16 @@ class HelperService
         $styleAttr = '';
 
         if ($style !== '') {
-            $styleAttr = ' style="'
-                . htmlspecialchars(
-                    $style,
-                    ENT_QUOTES | ENT_SUBSTITUTE,
-                    'UTF-8'
-                )
-                . '"';
+            $styleAttr = ' style="' . htmlspecialchars(
+                $style,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) . '"';
         }
 
-        return '<'
-            . $tag
-            . $styleAttr
-            . '>'
+        return '<' . $tag . $styleAttr . '>'
             . $content
-            . '</'
-            . $tag
-            . '>';
+            . '</' . $tag . '>';
     }
 
     /**
@@ -254,13 +323,11 @@ class HelperService
             return $text;
         }
 
-        return '<a href="'
-            . htmlspecialchars(
-                $url,
-                ENT_QUOTES | ENT_SUBSTITUTE,
-                'UTF-8'
-            )
-            . '" target="_blank" rel="noopener noreferrer">'
+        return '<a href="' . htmlspecialchars(
+            $url,
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        ) . '" target="_blank" rel="noopener noreferrer">'
             . $text
             . '</a>';
     }
@@ -279,39 +346,36 @@ class HelperService
         $openTags = '';
         $closeTags = '';
 
-        /**
+        /*
          * Bold.
          */
         if (
-            method_exists($fontStyle, 'isBold')
-            && $fontStyle->isBold()
+            method_exists($fontStyle, 'isBold') &&
+            $fontStyle->isBold()
         ) {
             $openTags .= '<strong>';
             $closeTags = '</strong>' . $closeTags;
         }
 
-        /**
+        /*
          * Italic.
          */
         if (
-            method_exists($fontStyle, 'isItalic')
-            && $fontStyle->isItalic()
+            method_exists($fontStyle, 'isItalic') &&
+            $fontStyle->isItalic()
         ) {
             $openTags .= '<em>';
             $closeTags = '</em>' . $closeTags;
         }
 
-        /**
+        /*
          * Underline.
          */
         if (method_exists($fontStyle, 'getUnderline')) {
             try {
                 $underline = $fontStyle->getUnderline();
 
-                if (
-                    $underline
-                    && $underline !== 'none'
-                ) {
+                if ($underline && $underline !== 'none') {
                     $openTags .= '<u>';
                     $closeTags = '</u>' . $closeTags;
                 }
@@ -319,18 +383,18 @@ class HelperService
             }
         }
 
-        /**
+        /*
          * Strikethrough.
          */
         if (
-            method_exists($fontStyle, 'isStrikethrough')
-            && $fontStyle->isStrikethrough()
+            method_exists($fontStyle, 'isStrikethrough') &&
+            $fontStyle->isStrikethrough()
         ) {
             $openTags .= '<s>';
             $closeTags = '</s>' . $closeTags;
         }
 
-        /**
+        /*
          * Font color.
          */
         if (method_exists($fontStyle, 'getColor')) {
@@ -338,54 +402,39 @@ class HelperService
                 $color = $fontStyle->getColor();
 
                 if ($color) {
-                    $color = ltrim(
-                        (string) $color,
-                        '#'
-                    );
+                    $color = ltrim((string) $color, '#');
 
-                    if (
-                        preg_match(
-                            '/^[a-fA-F0-9]{3,8}$/',
-                            $color
-                        )
-                    ) {
+                    if (preg_match('/^[a-fA-F0-9]{3,8}$/', $color)) {
                         $openTags .= '<span style="color:#'
                             . $color
                             . '">';
 
-                        $closeTags =
-                            '</span>'
-                            . $closeTags;
+                        $closeTags = '</span>' . $closeTags;
                     }
                 }
             } catch (\Throwable $e) {
             }
         }
 
-        /**
+        /*
          * Font size.
          */
         if (method_exists($fontStyle, 'getSize')) {
             try {
                 $size = $fontStyle->getSize();
 
-                if (
-                    $size !== null
-                    && is_numeric($size)
-                ) {
+                if ($size !== null && is_numeric($size)) {
                     $openTags .= '<span style="font-size:'
                         . (float) $size
                         . 'pt">';
 
-                    $closeTags =
-                        '</span>'
-                        . $closeTags;
+                    $closeTags = '</span>' . $closeTags;
                 }
             } catch (\Throwable $e) {
             }
         }
 
-        /**
+        /*
          * Font family.
          */
         if (method_exists($fontStyle, 'getName')) {
@@ -399,33 +448,24 @@ class HelperService
                         'UTF-8'
                     );
 
-                    $openTags =
-                        '<span style="font-family:\''
+                    $openTags = '<span style="font-family:\''
                         . $fontName
                         . '\'">'
                         . $openTags;
 
-                    $closeTags =
-                        '</span>'
-                        . $closeTags;
+                    $closeTags = '</span>' . $closeTags;
                 }
             } catch (\Throwable $e) {
             }
         }
 
-        return $openTags
-            . $text
-            . $closeTags;
+        return $openTags . $text . $closeTags;
     }
 
     /**
      * Render Word image.
      *
-     * PHPWord can return image source like:
-     *
-     * zip://D:\xampp82\tmp\php9EDA.tmp#word/media/image1.jpg
-     *
-     * The image is actually inside the DOCX ZIP file.
+     * Keep the original image handling logic.
      */
     protected static function renderPhpWordImage(
         WordImage $element,
@@ -442,10 +482,7 @@ class HelperService
                 $source = $element->getSource();
             }
 
-            if (
-                !is_string($source)
-                || $source === ''
-            ) {
+            if (!is_string($source) || $source === '') {
                 \Pimcore\Logger::warning(
                     'PHPWord image source is empty.'
                 );
@@ -453,39 +490,30 @@ class HelperService
                 return '';
             }
 
-            /**
+            /*
              * Read image binary.
-             *
-             * IMPORTANT:
              * Do not use file_exists() on zip:// source.
              */
-            $data = self::readPhpWordImageSource(
-                $source
-            );
+            $data = self::readPhpWordImageSource($source);
 
-            if (
-                $data === false
-                || $data === ''
-            ) {
+            if ($data === false || $data === '') {
                 \Pimcore\Logger::warning(
-                    'Unable to read PHPWord image source: '
-                    . $source
+                    'Unable to read PHPWord image source: ' . $source
                 );
 
                 return '';
             }
 
-            /**
+            /*
              * Detect extension.
              */
-            $extension =
-                self::getImageExtensionFromData(
-                    $data,
-                    $element,
-                    $source
-                );
+            $extension = self::getImageExtensionFromData(
+                $data,
+                $element,
+                $source
+            );
 
-            /**
+            /*
              * Get image name.
              */
             $name = '';
@@ -498,54 +526,43 @@ class HelperService
                 }
             }
 
-            /**
+            /*
              * Fallback to source name.
              */
             if (!$name) {
-                $name = self::getImageNameFromSource(
-                    $source
-                );
+                $name = self::getImageNameFromSource($source);
             }
 
-            /**
+            /*
              * Fallback generated name.
              */
             if (!$name) {
                 $name = 'word-image-' . uniqid();
             }
 
-            /**
+            /*
              * Remove extension.
              */
-            $name = pathinfo(
-                $name,
-                PATHINFO_FILENAME
-            );
-
-            $name = self::sanitizeFileName(
-                $name
-            );
-
+            $name = pathinfo($name, PATHINFO_FILENAME);
+            $name = self::sanitizeFileName($name);
             $name .= '.' . $extension;
 
-            /**
+            /*
              * Save image into Pimcore.
              */
-            $asset =
-                self::getOrCreateAssetFromData(
-                    $data,
-                    $mainObject,
-                    $name
-                );
+            $asset = self::getOrCreateAssetFromData(
+                $data,
+                $mainObject,
+                $name
+            );
 
             if (!$asset) {
                 return '';
             }
 
-            $imageUrl =
-                $asset->getFrontendFullPath();
+            $imageUrl = $asset->getFrontendFullPath();
 
-            /**
+            /*
              * Get Word image width.
              */
             $width = null;
@@ -561,34 +578,25 @@ class HelperService
             $style = 'max-width:100%;height:auto;';
 
             if (
-                $width !== null
-                && is_numeric($width)
-                && (float) $width > 0
+                $width !== null &&
+                is_numeric($width) &&
+                (float) $width > 0
             ) {
-                $style =
-                    'width:'
-                    . (float) $width
-                    . 'px;'
+                $style = 'width:' . (float) $width . 'px;'
                     . 'max-width:100%;'
                     . 'height:auto;';
             }
 
             return '<p style="text-align:center;">'
-                . '<img src="'
-                . htmlspecialchars(
+                . '<img src="' . htmlspecialchars(
                     $imageUrl,
                     ENT_QUOTES | ENT_SUBSTITUTE,
                     'UTF-8'
-                )
-                . '" style="'
-                . $style
-                . '" alt="" />'
+                ) . '" style="' . $style . '" alt="" />'
                 . '</p>';
-
         } catch (\Throwable $e) {
             \Pimcore\Logger::error(
-                'Unable to render Word image: '
-                . $e->getMessage()
+                'Unable to render Word image: ' . $e->getMessage()
             );
 
             return '';
@@ -599,7 +607,6 @@ class HelperService
      * Read PHPWord image source.
      *
      * Supports:
-     *
      * - Normal filesystem path
      * - zip:// source
      * - DOCX temporary file
@@ -607,62 +614,42 @@ class HelperService
     protected static function readPhpWordImageSource(
         string $source
     ) {
-        /**
+        /*
          * ZIP stream.
          */
         if (strpos($source, 'zip://') === 0) {
-            /**
+            /*
              * First try direct stream.
              */
-            $data = @file_get_contents(
-                $source
-            );
+            $data = @file_get_contents($source);
 
-            if (
-                $data !== false
-                && $data !== ''
-            ) {
+            if ($data !== false && $data !== '') {
                 return $data;
             }
 
-            /**
+            /*
              * Fallback to ZipArchive.
              */
-            return self::readImageFromZipSource(
-                $source
-            );
+            return self::readImageFromZipSource($source);
         }
 
-        /**
+        /*
          * Normal filesystem path.
          */
-        if (
-            file_exists($source)
-            && is_readable($source)
-        ) {
-            $data = @file_get_contents(
-                $source
-            );
+        if (file_exists($source) && is_readable($source)) {
+            $data = @file_get_contents($source);
 
-            if (
-                $data !== false
-                && $data !== ''
-            ) {
+            if ($data !== false && $data !== '') {
                 return $data;
             }
         }
 
-        /**
+        /*
          * Last attempt.
          */
-        $data = @file_get_contents(
-            $source
-        );
+        $data = @file_get_contents($source);
 
-        if (
-            $data !== false
-            && $data !== ''
-        ) {
+        if ($data !== false && $data !== '') {
             return $data;
         }
 
@@ -673,7 +660,6 @@ class HelperService
      * Read image directly from DOCX ZIP.
      *
      * Example:
-     *
      * zip://D:\xampp82\tmp\php9EDA.tmp#word/media/image1.jpg
      */
     protected static function readImageFromZipSource(
@@ -687,94 +673,61 @@ class HelperService
             return false;
         }
 
-        /**
+        /*
          * Remove zip:// prefix.
          */
-        $path = substr(
-            $source,
-            6
-        );
+        $path = substr($source, 6);
 
-        /**
+        /*
          * Find # separator.
          */
-        $separatorPosition = strrpos(
-            $path,
-            '#'
-        );
+        $separatorPosition = strrpos($path, '#');
 
         if ($separatorPosition === false) {
             return false;
         }
 
-        /**
+        /*
          * Example:
-         *
          * D:\xampp82\tmp\php9EDA.tmp
          */
-        $zipPath = substr(
-            $path,
-            0,
-            $separatorPosition
-        );
+        $zipPath = substr($path, 0, $separatorPosition);
 
-        /**
+        /*
          * Example:
-         *
          * word/media/image1.jpg
          */
-        $internalPath = substr(
-            $path,
-            $separatorPosition + 1
-        );
+        $internalPath = substr($path, $separatorPosition + 1);
 
-        if (
-            $zipPath === ''
-            || $internalPath === ''
-        ) {
+        if ($zipPath === '' || $internalPath === '') {
             return false;
         }
 
-        if (
-            !file_exists($zipPath)
-            || !is_readable($zipPath)
-        ) {
+        if (!file_exists($zipPath) || !is_readable($zipPath)) {
             \Pimcore\Logger::warning(
-                'DOCX temporary file does not exist: '
-                . $zipPath
+                'DOCX temporary file does not exist: ' . $zipPath
             );
 
             return false;
         }
 
         $zip = new \ZipArchive();
-
-        $result = $zip->open(
-            $zipPath
-        );
+        $result = $zip->open($zipPath);
 
         if ($result !== true) {
             \Pimcore\Logger::warning(
-                'Unable to open DOCX ZIP. Error code: '
-                . $result
+                'Unable to open DOCX ZIP. Error code: ' . $result
             );
 
             return false;
         }
 
-        $data = $zip->getFromName(
-            $internalPath
-        );
-
+        $data = $zip->getFromName($internalPath);
         $zip->close();
 
-        if (
-            $data === false
-            || $data === ''
-        ) {
+        if ($data === false || $data === '') {
             \Pimcore\Logger::warning(
-                'Unable to read image from DOCX ZIP: '
-                . $internalPath
+                'Unable to read image from DOCX ZIP: ' . $internalPath
             );
 
             return false;
@@ -789,19 +742,12 @@ class HelperService
     protected static function getImageNameFromSource(
         string $source
     ): string {
-        /**
+        /*
          * ZIP source.
          */
         if (strpos($source, 'zip://') === 0) {
-            $path = substr(
-                $source,
-                6
-            );
-
-            $separatorPosition = strrpos(
-                $path,
-                '#'
-            );
+            $path = substr($source, 6);
+            $separatorPosition = strrpos($path, '#');
 
             if ($separatorPosition !== false) {
                 $internalPath = substr(
@@ -809,9 +755,7 @@ class HelperService
                     $separatorPosition + 1
                 );
 
-                return basename(
-                    $internalPath
-                );
+                return basename($internalPath);
             }
         }
 
@@ -827,37 +771,28 @@ class HelperService
         string $name
     ) {
         try {
-            if (
-                !$mainObject
-                || $data === ''
-            ) {
+            if (!$mainObject || $data === '') {
                 return null;
             }
 
             $config = self::getConfig();
 
-            $folderPath =
-                isset($config['asset_store_path'])
-                    ? $config['asset_store_path']
-                    : '/word_media';
+            $folderPath = isset($config['asset_store_path'])
+                ? $config['asset_store_path']
+                : '/word_media';
 
-            $classname = strtolower(
-                $mainObject->getClassname()
-            );
+            $classname = strtolower($mainObject->getClassname());
 
-            $folderPath .=
-                '/'
+            $folderPath .= '/'
                 . $classname
                 . '/'
                 . $classname
                 . '-'
                 . $mainObject->getId();
 
-            $name = self::sanitizeFileName(
-                $name
-            );
+            $name = self::sanitizeFileName($name);
 
-            /**
+            /*
              * Check existing image.
              */
             $asset = Image::getByPath(
@@ -868,54 +803,38 @@ class HelperService
                 return $asset;
             }
 
-            /**
+            /*
              * Create folder.
              */
-            $folder = Asset::getByPath(
-                $folderPath
-            );
+            $folder = Asset::getByPath($folderPath);
 
             if (!$folder) {
-                $folder =
-                    Asset\Service::createFolderByPath(
-                        $folderPath
-                    );
+                $folder = Asset\Service::createFolderByPath(
+                    $folderPath
+                );
             }
 
             if (!$folder) {
                 \Pimcore\Logger::error(
-                    'Unable to create asset folder: '
-                    . $folderPath
+                    'Unable to create asset folder: ' . $folderPath
                 );
 
                 return null;
             }
 
-            /**
+            /*
              * Create Pimcore image asset.
              */
             $asset = new Image();
-
-            $asset->setFileName(
-                $name
-            );
-
-            $asset->setData(
-                $data
-            );
-
-            $asset->setParent(
-                $folder
-            );
-
+            $asset->setFileName($name);
+            $asset->setData($data);
+            $asset->setParent($folder);
             $asset->save();
 
             return $asset;
-
         } catch (\Throwable $e) {
             \Pimcore\Logger::error(
-                'Unable to create Word image asset: '
-                . $e->getMessage()
+                'Unable to create Word image asset: ' . $e->getMessage()
             );
 
             return null;
@@ -930,23 +849,13 @@ class HelperService
         $element = null,
         $source = null
     ): string {
-        /**
+        /*
          * Detect MIME from image binary.
          */
-        if (
-            function_exists(
-                'getimagesizefromstring'
-            )
-        ) {
-            $imageInfo =
-                @getimagesizefromstring(
-                    $data
-                );
+        if (function_exists('getimagesizefromstring')) {
+            $imageInfo = @getimagesizefromstring($data);
 
-            if (
-                is_array($imageInfo)
-                && isset($imageInfo['mime'])
-            ) {
+            if (is_array($imageInfo) && isset($imageInfo['mime'])) {
                 $mimeMap = [
                     'image/jpeg' => 'jpg',
                     'image/jpg'  => 'jpg',
@@ -957,34 +866,25 @@ class HelperService
                     'image/tiff' => 'tiff',
                 ];
 
-                $mime = strtolower(
-                    (string) $imageInfo['mime']
-                );
+                $mime = strtolower((string) $imageInfo['mime']);
 
-                if (
-                    isset($mimeMap[$mime])
-                ) {
+                if (isset($mimeMap[$mime])) {
                     return $mimeMap[$mime];
                 }
             }
         }
 
-        /**
+        /*
          * PHPWord extension.
          */
         if (
-            $element
-            && method_exists(
-                $element,
-                'getImageExtension'
-            )
+            $element &&
+            method_exists($element, 'getImageExtension')
         ) {
             try {
-                $extension =
-                    strtolower(
-                        (string)
-                        $element->getImageExtension()
-                    );
+                $extension = strtolower(
+                    (string) $element->getImageExtension()
+                );
 
                 if ($extension === 'jpeg') {
                     return 'jpg';
@@ -1011,20 +911,13 @@ class HelperService
             }
         }
 
-        /**
+        /*
          * Source extension.
          */
-        if (
-            is_string($source)
-            && $source !== ''
-        ) {
-            $extension =
-                strtolower(
-                    pathinfo(
-                        $source,
-                        PATHINFO_EXTENSION
-                    )
-                );
+        if (is_string($source) && $source !== '') {
+            $extension = strtolower(
+                pathinfo($source, PATHINFO_EXTENSION)
+            );
 
             if ($extension === 'jpeg') {
                 return 'jpg';
@@ -1059,8 +952,7 @@ class HelperService
         Table $table,
         $mainObject
     ): string {
-        $html =
-            '<table '
+        $html = '<table '
             . 'border="1" '
             . 'cellspacing="0" '
             . 'cellpadding="5" '
@@ -1093,16 +985,315 @@ class HelperService
     ): string {
         $html = '<td>';
 
-        foreach ($cell->getElements() as $element) {
-            $html .= self::renderPhpWordElement(
-                $element,
-                $mainObject
-            );
-        }
+        $html .= self::renderPhpWordElements(
+            $cell->getElements(),
+            $mainObject
+        );
 
         $html .= '</td>';
 
         return $html;
+    }
+
+    /**
+     * Render a grouped Word list.
+     */
+    protected static function renderPhpWordList(
+        array $items,
+        string $listTag,
+        $mainObject
+    ): string {
+        if ($items === []) {
+            return '';
+        }
+
+        if (!in_array($listTag, ['ul', 'ol'], true)) {
+            $listTag = 'ul';
+        }
+
+        $html = '<' . $listTag . '>';
+
+        foreach ($items as $item) {
+            $html .= '<li>';
+
+            $html .= self::renderPhpWordListItemContent(
+                $item,
+                $mainObject
+            );
+
+            $html .= '</li>';
+        }
+
+        $html .= '</' . $listTag . '>';
+
+        return $html;
+    }
+
+    /**
+     * Render the content inside one list item.
+     */
+    protected static function renderPhpWordListItemContent(
+        $element,
+        $mainObject
+    ): string {
+        /*
+         * ListItemRun contains inline elements such as text,
+         * links and images.
+         */
+        if ($element instanceof ListItemRun) {
+            $html = '';
+
+            foreach ($element->getElements() as $child) {
+                $html .= self::renderPhpWordElement(
+                    $child,
+                    $mainObject
+                );
+            }
+
+            return $html;
+        }
+
+        /*
+         * ListItem usually exposes its text as a TextRun.
+         */
+        if ($element instanceof ListItem) {
+            if (method_exists($element, 'getTextObject')) {
+                try {
+                    $textObject = $element->getTextObject();
+
+                    if ($textObject) {
+                        return self::renderPhpWordElement(
+                            $textObject,
+                            $mainObject
+                        );
+                    }
+                } catch (\Throwable $e) {
+                    // Fall through to getElements().
+                }
+            }
+        }
+
+        /*
+         * Fallback for PHPWord versions exposing nested elements.
+         */
+        if (method_exists($element, 'getElements')) {
+            $html = '';
+
+            foreach ($element->getElements() as $child) {
+                $html .= self::renderPhpWordElement(
+                    $child,
+                    $mainObject
+                );
+            }
+
+            return $html;
+        }
+
+        /*
+         * Fallback for versions exposing a text getter.
+         */
+        if (method_exists($element, 'getText')) {
+            try {
+                $text = $element->getText();
+
+                if (is_string($text) || is_numeric($text)) {
+                    return htmlspecialchars(
+                        (string) $text,
+                        ENT_QUOTES | ENT_SUBSTITUTE,
+                        'UTF-8'
+                    );
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Determine whether a Word list is ordered or unordered.
+     */
+    protected static function getPhpWordListTag(
+        $element
+    ): string {
+        $style = null;
+
+        if (method_exists($element, 'getStyle')) {
+            try {
+                $style = $element->getStyle();
+            } catch (\Throwable $e) {
+                $style = null;
+            }
+        }
+
+        /*
+         * Inspect list type from the style object.
+         */
+        if ($style && !is_string($style)) {
+            foreach (['getListType', 'getType'] as $method) {
+                if (!method_exists($style, $method)) {
+                    continue;
+                }
+
+                try {
+                    $type = $style->{$method}();
+
+                    $tag = self::resolvePhpWordListTag($type);
+
+                    if ($tag !== null) {
+                        return $tag;
+                    }
+                } catch (\Throwable $e) {
+                }
+            }
+
+            /*
+             * Some PHPWord styles expose their values as arrays.
+             */
+            if (method_exists($style, 'toArray')) {
+                try {
+                    $styleArray = $style->toArray();
+
+                    if (is_array($styleArray)) {
+                        foreach (['listType', 'type'] as $key) {
+                            if (isset($styleArray[$key])) {
+                                $tag = self::resolvePhpWordListTag(
+                                    $styleArray[$key]
+                                );
+
+                                if ($tag !== null) {
+                                    return $tag;
+                                }
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {
+                }
+            }
+        }
+
+        /*
+         * Inspect element style data if available.
+         */
+        if (method_exists($element, 'getStyle')) {
+            try {
+                $elementStyle = $element->getStyle();
+
+                if (is_array($elementStyle)) {
+                    foreach (['listType', 'type'] as $key) {
+                        if (isset($elementStyle[$key])) {
+                            $tag = self::resolvePhpWordListTag(
+                                $elementStyle[$key]
+                            );
+
+                            if ($tag !== null) {
+                                return $tag;
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+
+        /*
+         * PHPWord commonly represents bullet list items with
+         * ListItem and numbered items with a list style.
+         *
+         * Default to ul when the list type is unavailable.
+         */
+        return 'ul';
+    }
+
+    /**
+     * Resolve a PHPWord list type to ul or ol.
+     */
+    protected static function resolvePhpWordListTag(
+        $type
+    ): ?string {
+        if ($type === null || is_array($type) || is_object($type)) {
+            return null;
+        }
+
+        $value = strtolower(trim((string) $type));
+
+        if ($value === '') {
+            return null;
+        }
+
+        /*
+         * Numbered list styles.
+         */
+        if (
+            strpos($value, 'number') !== false ||
+            strpos($value, 'decimal') !== false ||
+            strpos($value, 'roman') !== false ||
+            strpos($value, 'alpha') !== false ||
+            strpos($value, 'letter') !== false
+        ) {
+            return 'ol';
+        }
+
+        /*
+         * Bullet list styles.
+         */
+        if (
+            strpos($value, 'bullet') !== false ||
+            strpos($value, 'unordered') !== false
+        ) {
+            return 'ul';
+        }
+
+        /*
+         * PHPWord numeric list type constants:
+         * TYPE_NUMBER and TYPE_NUMBER_NESTED are ordered lists.
+         * TYPE_BULLET and TYPE_BULLET_FILLED are unordered lists.
+         */
+        if (is_numeric($type)) {
+            $numericType = (int) $type;
+
+            $numberTypes = [];
+
+            foreach (
+                [
+                    'TYPE_NUMBER',
+                    'TYPE_NUMBER_NESTED',
+                ] as $constant
+            ) {
+                $constantName =
+                    'PhpOffice\\PhpWord\\Style\\ListItem::' . $constant;
+
+                if (defined($constantName)) {
+                    $numberTypes[] = (int) constant($constantName);
+                }
+            }
+
+            if (in_array($numericType, $numberTypes, true)) {
+                return 'ol';
+            }
+
+            $bulletTypes = [];
+
+            foreach (
+                [
+                    'TYPE_BULLET',
+                    'TYPE_BULLET_FILLED',
+                ] as $constant
+            ) {
+                $constantName =
+                    'PhpOffice\\PhpWord\\Style\\ListItem::' . $constant;
+
+                if (defined($constantName)) {
+                    $bulletTypes[] = (int) constant($constantName);
+                }
+            }
+
+            if (in_array($numericType, $bulletTypes, true)) {
+                return 'ul';
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -1111,22 +1302,18 @@ class HelperService
     protected static function getPhpWordParagraphStyle(
         $style
     ): string {
-        if (
-            !$style
-            || is_string($style)
-        ) {
+        if (!$style || is_string($style)) {
             return '';
         }
 
         $styles = [];
 
-        /**
+        /*
          * Alignment.
          */
         if (method_exists($style, 'getAlignment')) {
             try {
-                $alignment =
-                    $style->getAlignment();
+                $alignment = $style->getAlignment();
 
                 $alignmentMap = [
                     'left'    => 'left',
@@ -1136,100 +1323,63 @@ class HelperService
                     'justify' => 'justify',
                 ];
 
-                $alignmentValue =
-                    strtolower(
-                        (string) $alignment
-                    );
+                $alignmentValue = strtolower((string) $alignment);
 
-                if (
-                    isset(
-                        $alignmentMap[
-                            $alignmentValue
-                        ]
-                    )
-                ) {
-                    $styles[] =
-                        'text-align:'
-                        . $alignmentMap[
-                            $alignmentValue
-                        ];
+                if (isset($alignmentMap[$alignmentValue])) {
+                    $styles[] = 'text-align:'
+                        . $alignmentMap[$alignmentValue];
                 }
             } catch (\Throwable $e) {
             }
         }
 
-        /**
+        /*
          * Space before.
          */
         if (method_exists($style, 'getSpaceBefore')) {
             try {
-                $spaceBefore =
-                    $style->getSpaceBefore();
+                $spaceBefore = $style->getSpaceBefore();
 
-                if (
-                    $spaceBefore !== null
-                    && is_numeric($spaceBefore)
-                ) {
-                    $styles[] =
-                        'margin-top:'
-                        . (
-                            (float) $spaceBefore
-                            / 20
-                        )
+                if ($spaceBefore !== null && is_numeric($spaceBefore)) {
+                    $styles[] = 'margin-top:'
+                        . ((float) $spaceBefore / 20)
                         . 'pt';
                 }
             } catch (\Throwable $e) {
             }
         }
 
-        /**
+        /*
          * Space after.
          */
         if (method_exists($style, 'getSpaceAfter')) {
             try {
-                $spaceAfter =
-                    $style->getSpaceAfter();
+                $spaceAfter = $style->getSpaceAfter();
 
-                if (
-                    $spaceAfter !== null
-                    && is_numeric($spaceAfter)
-                ) {
-                    $styles[] =
-                        'margin-bottom:'
-                        . (
-                            (float) $spaceAfter
-                            / 20
-                        )
+                if ($spaceAfter !== null && is_numeric($spaceAfter)) {
+                    $styles[] = 'margin-bottom:'
+                        . ((float) $spaceAfter / 20)
                         . 'pt';
                 }
             } catch (\Throwable $e) {
             }
         }
 
-        /**
+        /*
          * Line spacing.
          */
         if (method_exists($style, 'getLineSpacing')) {
             try {
-                $lineSpacing =
-                    $style->getLineSpacing();
+                $lineSpacing = $style->getLineSpacing();
 
-                if (
-                    $lineSpacing !== null
-                    && is_numeric($lineSpacing)
-                ) {
-                    $styles[] =
-                        'line-height:'
-                        . (float) $lineSpacing;
+                if ($lineSpacing !== null && is_numeric($lineSpacing)) {
+                    $styles[] = 'line-height:' . (float) $lineSpacing;
                 }
             } catch (\Throwable $e) {
             }
         }
 
-        return implode(
-            ';',
-            $styles
-        );
+        return implode(';', $styles);
     }
 
     /**
@@ -1237,8 +1387,8 @@ class HelperService
      *
      * Heading 1 -> h1
      * Heading 2 -> h2
-     * Heading 3 -> h3
      * ...
+     * Heading 6 -> h6
      */
     protected static function getPhpWordHeadingTag(
         $style
@@ -1246,8 +1396,8 @@ class HelperService
         if (!$style) {
             return 'p';
         }
-        
-        /**
+
+        /*
          * Style can be a string.
          */
         if (is_string($style)) {
@@ -1255,46 +1405,65 @@ class HelperService
         } else {
             $styleName = '';
 
-            /**
+            /*
              * Try getStyleName().
              */
             if (method_exists($style, 'getStyleName')) {
                 try {
-                    $styleName =
-                        (string)
-                        $style->getStyleName();
+                    $styleName = (string) $style->getStyleName();
                 } catch (\Throwable $e) {
                     $styleName = '';
                 }
             }
 
-            /**
+            /*
              * Try getName().
              */
-            if (
-                !$styleName
-                && method_exists($style, 'getName')
-            ) {
+            if (!$styleName && method_exists($style, 'getName')) {
                 try {
-                    $styleName =
-                        (string)
-                        $style->getName();
+                    $styleName = (string) $style->getName();
                 } catch (\Throwable $e) {
                     $styleName = '';
                 }
             }
 
-            $styleName = trim(
-                $styleName
-            );
+            /*
+             * Some PHPWord versions provide paragraph style data
+             * as an array.
+             */
+            if (
+                !$styleName &&
+                method_exists($style, 'toArray')
+            ) {
+                try {
+                    $styleArray = $style->toArray();
+
+                    if (is_array($styleArray)) {
+                        foreach (
+                            ['styleName', 'name', 'basedOn'] as $key
+                        ) {
+                            if (
+                                isset($styleArray[$key]) &&
+                                is_string($styleArray[$key])
+                            ) {
+                                $styleName = $styleArray[$key];
+                                break;
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {
+                }
+            }
+
+            $styleName = trim($styleName);
         }
+
         if (!$styleName) {
             return 'p';
         }
 
-        /**
+        /*
          * Normalize:
-         *
          * Heading 1
          * Heading-1
          * Heading_1
@@ -1302,12 +1471,11 @@ class HelperService
          *
          * => heading1
          */
-        $normalized =
-            preg_replace(
-                '/[\s_-]+/',
-                '',
-                strtolower($styleName)
-            );
+        $normalized = preg_replace(
+            '/[\s_-]+/',
+            '',
+            strtolower($styleName)
+        );
 
         if (
             preg_match(
@@ -1319,7 +1487,7 @@ class HelperService
             return 'h' . $matches[1];
         }
 
-        /**
+        /*
          * Custom styles containing Heading.
          */
         if (
@@ -1343,12 +1511,12 @@ class HelperService
     ): string {
         $name = trim($name);
 
-        /**
+        /*
          * Remove path.
          */
         $name = basename($name);
 
-        /**
+        /*
          * Replace unsupported characters.
          */
         $name = preg_replace(
@@ -1357,22 +1525,15 @@ class HelperService
             $name
         );
 
-        /**
+        /*
          * Remove duplicate hyphens.
          */
-        $name = preg_replace(
-            '/-+/',
-            '-',
-            $name
-        );
+        $name = preg_replace('/-+/', '-', $name);
 
-        /**
+        /*
          * Remove leading/trailing characters.
          */
-        $name = trim(
-            $name,
-            '-.'
-        );
+        $name = trim($name, '-.');
 
         if (!$name) {
             return 'word-image-' . uniqid();
