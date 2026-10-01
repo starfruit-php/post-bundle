@@ -300,10 +300,10 @@ class DefaultController extends BaseController
 
             $html =
                 PostService::renderWordToHtml(
-                    $file->getPathname(),
+                    $file,
                     $object
                 );
-
+            // dd($file);
             if (!$html) {
                 return $this->sendResponse([
                     'success' => false,

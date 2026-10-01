@@ -374,7 +374,7 @@ document.addEventListener(
 
                                 {
                                     text:
-                                        "Lấy dữ liệu",
+                                        "Lấy dữ liệu từ file",
 
                                     iconCls:
                                         "pimcore_icon_import",
