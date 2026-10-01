@@ -1,0 +1,27 @@
+{
+  "name":"starfruit/post-bundle",
+  "description":"Starfruit Post Bundle",
+  "keywords":[
+    "starfruit", "post"
+  ],
+  "homepage":"https://github.com/starfruit-php/post-bundle",
+  "license":"MIT",
+  "authors":[
+    {
+      "name":"Nguyen Hoang Anh",
+      "email":"anhnh@starfruit.com.vn",
+      "role":"Developer"
+    }
+  ],
+  "require":{
+    "google/auth": "^1.48",
+    "google/apiclient": "^2.18"
+  },
+  "suggest":{
+  },
+  "autoload": {
+    "psr-4": {
+      "Starfruit\\PostBundle\\": "src/"
+    }
+  }
+}

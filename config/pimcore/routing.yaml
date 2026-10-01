@@ -1,0 +1,11 @@
+starfruit_post_homepage:
+    path:     /starfruit_post
+    defaults: { _controller: Starfruit\PostBundle\Controller\DefaultController::indexAction }
+
+starfruit_post_admin_check_to_init:
+    path:     /admin/stf-post/default/check-to-init/{id}
+    defaults: { _controller: Starfruit\PostBundle\Controller\Admin\DefaultController::checkToInit }
+
+starfruit_post_admin_start_action:
+    path:     /admin/stf-post/default/start-action
+    defaults: { _controller: Starfruit\PostBundle\Controller\Admin\DefaultController::startAction }
